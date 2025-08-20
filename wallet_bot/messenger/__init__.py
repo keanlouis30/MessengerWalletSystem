@@ -10,5 +10,5 @@
 # from wallet_bot.messenger.handler import process_message
 # from wallet_bot.messenger.api import send_text_message
 
-from .handler import process_message
+from .handler import process_webhook_message
 from .api import send_text_message, send_quick_replies
