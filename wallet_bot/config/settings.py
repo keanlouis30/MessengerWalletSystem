@@ -89,16 +89,33 @@ class Config:
     
     @classmethod
     def get_credentials_path(self):
-        # Get the path of the current file (settings.py)
+        """Find credentials.json using multiple strategies"""
+        
+        # Strategy 1: Relative to current file
         current_dir = os.path.dirname(__file__)
-        
-        # Go up three directories to get to the project root
-        # config -> wallet_bot -> src (root)
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_dir)))
+        path1 = os.path.join(project_root, 'credentials.json')
         
-        # Join the root path with the filename
-        return os.path.join(project_root, 'credentials.json')
-    
+        # Strategy 2: Current working directory
+        path2 = os.path.join(os.getcwd(), 'credentials.json')
+        
+        # Strategy 3: Common deployment paths
+        deployment_paths = [
+            '/opt/render/project/credentials.json',
+            '/opt/render/project/src/credentials.json',
+            './credentials.json',
+            'credentials.json'
+        ]
+        
+        # Try all paths
+        all_paths = [path1, path2] + deployment_paths
+        
+        for path in all_paths:
+            if os.path.exists(path):
+                return path
+        
+        # If none found, return the original calculated path for error reporting
+        return path1
     @classmethod
     def is_production(cls):
         """
