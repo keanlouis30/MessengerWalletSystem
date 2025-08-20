@@ -25,29 +25,36 @@ DEFAULT_WORKSHEET_CONFIGS = {
         'rows': 1000,
         'cols': 20,
         'headers': [
-            'Timestamp', 'Type', 'Amount', 'Currency', 'Description', 
-            'Category', 'Source', 'Destination', 'Status', 'Reference',
-            'User_ID', 'Session_ID', 'IP_Address', 'User_Agent', 'Notes',
-            'Created_At', 'Updated_At', 'Version', 'Hash', 'Extra_Data'
+            'timestamp', 'transaction_type', 'amount', 'currency', 'description', 
+            'category_or_source', 'source', 'destination', 'status', 'reference',
+            'user_id', 'session_id', 'ip_address', 'user_agent', 'notes',
+            'created_at', 'updated_at', 'version', 'hash', 'extra_data'
         ]
     },
     'Formatted_Report': {
         'rows': 500,
         'cols': 15,
         'headers': [
-            'Date', 'Transaction_Type', 'Amount', 'Currency', 'Description',
-            'Category', 'Balance_Before', 'Balance_After', 'Status', 'Reference_ID',
-            'User', 'Location', 'Method', 'Fees', 'Notes'
+            'date', 'transaction_type', 'amount', 'currency', 'description',
+            'category_or_source', 'balance_before', 'balance_after', 'status', 'reference_id',
+            'user', 'location', 'method', 'fees', 'notes'
         ]
     },
     'Summary': {
         'rows': 100,
         'cols': 10,
         'headers': [
-            'Period', 'Total_Income', 'Total_Expenses', 'Net_Amount', 'Transaction_Count',
-            'Average_Transaction', 'Largest_Transaction', 'Categories_Used', 'Active_Users', 'Last_Updated'
+            'period', 'total_income', 'total_expenses', 'net_amount', 'transaction_count',
+            'average_transaction', 'largest_transaction', 'categories_used', 'active_users', 'last_updated'
         ]
     }
+}
+
+# Required columns for different operations
+REQUIRED_COLUMNS = {
+    'Data_Log': ['timestamp', 'transaction_type', 'category_or_source', 'description', 'amount'],
+    'Formatted_Report': ['date', 'transaction_type', 'amount', 'description', 'category_or_source'],
+    'Summary': ['period', 'total_income', 'total_expenses', 'net_amount', 'transaction_count']
 }
 
 
@@ -171,6 +178,106 @@ def _get_spreadsheet() -> gspread.Spreadsheet:
         raise Exception(f"Failed to access Google Spreadsheet: {str(e)}")
 
 
+def normalize_column_name(column_name: str) -> str:
+    """
+    Normalize column names for consistent comparison.
+    Converts to lowercase and replaces spaces/special chars with underscores.
+    """
+    if not column_name:
+        return ""
+    
+    return column_name.lower().strip().replace(' ', '_').replace('-', '_')
+
+
+def get_existing_headers(worksheet: gspread.Worksheet) -> List[str]:
+    """
+    Get existing headers from the first row of the worksheet.
+    
+    Args:
+        worksheet: The worksheet to check
+        
+    Returns:
+        List[str]: List of normalized existing headers
+    """
+    try:
+        # Get the first row (headers)
+        headers = worksheet.row_values(1)
+        # Normalize headers for comparison
+        normalized_headers = [normalize_column_name(header) for header in headers if header.strip()]
+        logger.debug(f"Existing headers in {worksheet.title}: {normalized_headers}")
+        return normalized_headers
+    except Exception as e:
+        logger.warning(f"Could not get existing headers from {worksheet.title}: {e}")
+        return []
+
+
+def ensure_columns_exist(worksheet: gspread.Worksheet, required_columns: List[str]) -> bool:
+    """
+    Ensure that all required columns exist in the worksheet.
+    Creates missing columns if they don't exist.
+    
+    Args:
+        worksheet: The worksheet to check/modify
+        required_columns: List of required column names
+        
+    Returns:
+        bool: True if all columns exist or were created successfully
+    """
+    try:
+        existing_headers = get_existing_headers(worksheet)
+        normalized_required = [normalize_column_name(col) for col in required_columns]
+        
+        # Find missing columns
+        missing_columns = []
+        for req_col in normalized_required:
+            if req_col not in existing_headers:
+                missing_columns.append(req_col)
+        
+        if not missing_columns:
+            logger.debug(f"All required columns exist in {worksheet.title}")
+            return True
+        
+        logger.info(f"Missing columns in {worksheet.title}: {missing_columns}")
+        
+        # Get current headers (including empty ones to preserve positioning)
+        current_row = worksheet.row_values(1)
+        if not current_row:
+            current_row = []
+        
+        # Extend the row to include missing columns
+        updated_headers = current_row.copy()
+        
+        # Find the next available column position
+        next_col_index = len([h for h in current_row if h.strip()]) if current_row else 0
+        
+        # Add missing columns
+        for missing_col in missing_columns:
+            # Add empty columns if needed to reach the position
+            while len(updated_headers) <= next_col_index:
+                updated_headers.append('')
+            
+            updated_headers[next_col_index] = missing_col
+            next_col_index += 1
+        
+        # Update the header row
+        if len(updated_headers) > worksheet.col_count:
+            # Need to add more columns to the worksheet
+            cols_to_add = len(updated_headers) - worksheet.col_count
+            worksheet.add_cols(cols_to_add)
+            logger.info(f"Added {cols_to_add} columns to {worksheet.title}")
+        
+        # Update the first row with new headers
+        range_to_update = f"1:{len(updated_headers)}"
+        worksheet.update(range_to_update, [updated_headers])
+        
+        logger.info(f"Successfully added missing columns to {worksheet.title}: {missing_columns}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to ensure columns exist in {worksheet.title}: {e}")
+        return False
+
+
 def create_worksheet(sheet_name: str, rows: int = 1000, cols: int = 26, headers: Optional[List[str]] = None) -> gspread.Worksheet:
     """
     Create a new worksheet with the specified parameters.
@@ -220,13 +327,14 @@ def create_worksheet(sheet_name: str, rows: int = 1000, cols: int = 26, headers:
         raise Exception(f"Failed to create worksheet: {str(e)}")
 
 
-def get_worksheet(sheet_name: str, auto_create: bool = True) -> gspread.Worksheet:
+def get_worksheet(sheet_name: str, auto_create: bool = True, ensure_columns: bool = True) -> gspread.Worksheet:
     """
     Get a specific worksheet by name. Creates it if it doesn't exist and auto_create is True.
     
     Args:
         sheet_name (str): Name of the worksheet to retrieve
         auto_create (bool): Whether to create the worksheet if it doesn't exist
+        ensure_columns (bool): Whether to ensure required columns exist
         
     Returns:
         gspread.Worksheet: The worksheet instance
@@ -238,6 +346,11 @@ def get_worksheet(sheet_name: str, auto_create: bool = True) -> gspread.Workshee
         spreadsheet = _get_spreadsheet()
         worksheet = spreadsheet.worksheet(sheet_name)
         logger.debug(f"Successfully accessed existing worksheet: {sheet_name}")
+        
+        # Ensure required columns exist if requested
+        if ensure_columns and sheet_name in REQUIRED_COLUMNS:
+            ensure_columns_exist(worksheet, REQUIRED_COLUMNS[sheet_name])
+        
         return worksheet
         
     except WorksheetNotFound:
@@ -279,11 +392,65 @@ def ensure_worksheet_exists(sheet_name: str) -> bool:
         bool: True if worksheet exists or was created successfully
     """
     try:
-        get_worksheet(sheet_name, auto_create=True)
+        get_worksheet(sheet_name, auto_create=True, ensure_columns=True)
         return True
     except Exception as e:
         logger.error(f"Failed to ensure worksheet '{sheet_name}' exists: {str(e)}")
         return False
+
+
+def validate_worksheet_structure(sheet_name: str) -> Dict[str, Any]:
+    """
+    Validate that a worksheet has the required structure and columns.
+    
+    Args:
+        sheet_name (str): Name of the worksheet to validate
+        
+    Returns:
+        Dict[str, Any]: Validation results including status and details
+    """
+    try:
+        worksheet = get_worksheet(sheet_name, auto_create=True, ensure_columns=False)
+        existing_headers = get_existing_headers(worksheet)
+        
+        validation_result = {
+            'worksheet_exists': True,
+            'existing_headers': existing_headers,
+            'missing_columns': [],
+            'validation_passed': True,
+            'actions_taken': []
+        }
+        
+        if sheet_name in REQUIRED_COLUMNS:
+            required_columns = [normalize_column_name(col) for col in REQUIRED_COLUMNS[sheet_name]]
+            missing_columns = [col for col in required_columns if col not in existing_headers]
+            
+            validation_result['missing_columns'] = missing_columns
+            validation_result['required_columns'] = required_columns
+            
+            if missing_columns:
+                validation_result['validation_passed'] = False
+                logger.info(f"Attempting to create missing columns in {sheet_name}: {missing_columns}")
+                
+                # Attempt to create missing columns
+                if ensure_columns_exist(worksheet, REQUIRED_COLUMNS[sheet_name]):
+                    validation_result['validation_passed'] = True
+                    validation_result['actions_taken'].append(f"Created missing columns: {missing_columns}")
+                    logger.info(f"Successfully created missing columns in {sheet_name}")
+                else:
+                    validation_result['actions_taken'].append(f"Failed to create missing columns: {missing_columns}")
+                    logger.error(f"Failed to create missing columns in {sheet_name}")
+        
+        return validation_result
+        
+    except Exception as e:
+        logger.error(f"Failed to validate worksheet structure for '{sheet_name}': {e}")
+        return {
+            'worksheet_exists': False,
+            'error': str(e),
+            'validation_passed': False,
+            'actions_taken': []
+        }
 
 
 def initialize_default_worksheets() -> Dict[str, bool]:
@@ -298,8 +465,17 @@ def initialize_default_worksheets() -> Dict[str, bool]:
     for sheet_name in DEFAULT_WORKSHEET_CONFIGS.keys():
         try:
             ensure_worksheet_exists(sheet_name)
-            results[sheet_name] = True
-            logger.info(f"Successfully initialized worksheet: {sheet_name}")
+            # Also validate the structure
+            validation_result = validate_worksheet_structure(sheet_name)
+            results[sheet_name] = validation_result['validation_passed']
+            
+            if validation_result['validation_passed']:
+                logger.info(f"Successfully initialized worksheet: {sheet_name}")
+                if validation_result['actions_taken']:
+                    logger.info(f"Actions taken for {sheet_name}: {validation_result['actions_taken']}")
+            else:
+                logger.error(f"Failed to properly initialize worksheet '{sheet_name}': {validation_result}")
+                
         except Exception as e:
             results[sheet_name] = False
             logger.error(f"Failed to initialize worksheet '{sheet_name}': {str(e)}")
@@ -322,7 +498,7 @@ def append_row(sheet_name: str, row_data: List[Any], auto_create: bool = True) -
         Exception: If append operation fails
     """
     try:
-        worksheet = get_worksheet(sheet_name, auto_create=auto_create)
+        worksheet = get_worksheet(sheet_name, auto_create=auto_create, ensure_columns=True)
         
         # Convert all values to strings to ensure compatibility
         formatted_row = [str(value) if value is not None else "" for value in row_data]
@@ -355,7 +531,7 @@ def get_all_records(sheet_name: str, auto_create: bool = True) -> List[Dict[str,
         Exception: If reading operation fails
     """
     try:
-        worksheet = get_worksheet(sheet_name, auto_create=auto_create)
+        worksheet = get_worksheet(sheet_name, auto_create=auto_create, ensure_columns=True)
         
         # Get all records as dictionaries
         records = worksheet.get_all_records()
@@ -385,7 +561,7 @@ def get_all_values(sheet_name: str, auto_create: bool = True) -> List[List[str]]
         Exception: If reading operation fails
     """
     try:
-        worksheet = get_worksheet(sheet_name, auto_create=auto_create)
+        worksheet = get_worksheet(sheet_name, auto_create=auto_create, ensure_columns=True)
         
         # Get all values including headers
         values = worksheet.get_all_values()
@@ -400,13 +576,14 @@ def get_all_values(sheet_name: str, auto_create: bool = True) -> List[List[str]]
         raise Exception(f"Failed to read values from worksheet: {str(e)}")
 
 
-def clear_worksheet(sheet_name: str, auto_create: bool = True) -> bool:
+def clear_worksheet(sheet_name: str, auto_create: bool = True, preserve_headers: bool = True) -> bool:
     """
     Clear all content from a worksheet.
     
     Args:
         sheet_name (str): Name of the worksheet to clear
         auto_create (bool): Whether to create the worksheet if it doesn't exist
+        preserve_headers (bool): Whether to preserve the header row
         
     Returns:
         bool: True if successful, False otherwise
@@ -415,11 +592,24 @@ def clear_worksheet(sheet_name: str, auto_create: bool = True) -> bool:
         Exception: If clear operation fails
     """
     try:
-        worksheet = get_worksheet(sheet_name, auto_create=auto_create)
+        worksheet = get_worksheet(sheet_name, auto_create=auto_create, ensure_columns=True)
         
-        # Clear all content
-        worksheet.clear()
-        logger.info(f"Successfully cleared worksheet: '{sheet_name}'")
+        if preserve_headers:
+            # Get the headers first
+            headers = worksheet.row_values(1)
+            # Clear all content
+            worksheet.clear()
+            # Restore headers if they existed
+            if headers:
+                worksheet.update('1:1', [headers])
+                logger.info(f"Successfully cleared worksheet '{sheet_name}' while preserving headers")
+            else:
+                logger.info(f"Successfully cleared worksheet: '{sheet_name}' (no headers to preserve)")
+        else:
+            # Clear all content
+            worksheet.clear()
+            logger.info(f"Successfully cleared worksheet: '{sheet_name}'")
+        
         return True
         
     except APIError as e:
@@ -447,7 +637,7 @@ def update_range(sheet_name: str, range_name: str, values: List[List[Any]], auto
         Exception: If update operation fails
     """
     try:
-        worksheet = get_worksheet(sheet_name, auto_create=auto_create)
+        worksheet = get_worksheet(sheet_name, auto_create=auto_create, ensure_columns=True)
         
         # Convert all values to strings
         formatted_values = [
@@ -484,7 +674,7 @@ def batch_update(sheet_name: str, updates: List[Dict[str, Any]], auto_create: bo
         Exception: If batch update operation fails
     """
     try:
-        worksheet = get_worksheet(sheet_name, auto_create=auto_create)
+        worksheet = get_worksheet(sheet_name, auto_create=auto_create, ensure_columns=True)
         
         # Format updates for batch operation
         formatted_updates = []
@@ -525,7 +715,7 @@ def get_worksheet_info(sheet_name: str, auto_create: bool = True) -> Dict[str, A
         Exception: If operation fails
     """
     try:
-        worksheet = get_worksheet(sheet_name, auto_create=auto_create)
+        worksheet = get_worksheet(sheet_name, auto_create=auto_create, ensure_columns=True)
         
         info = {
             'title': worksheet.title,
@@ -534,6 +724,10 @@ def get_worksheet_info(sheet_name: str, auto_create: bool = True) -> Dict[str, A
             'id': worksheet.id,
             'url': worksheet.url
         }
+        
+        # Add validation information
+        validation_result = validate_worksheet_structure(sheet_name)
+        info['validation'] = validation_result
         
         logger.debug(f"Retrieved info for worksheet '{sheet_name}': {info}")
         return info
