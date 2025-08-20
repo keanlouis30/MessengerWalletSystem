@@ -188,7 +188,8 @@ def regenerate_formatted_report() -> bool:
     Regenerate the Formatted_Report sheet from Data_Log data.
     
     This function reads all data from Data_Log, clears the Formatted_Report sheet,
-    and rebuilds it with proper daily grouping and formatting.
+    and rebuilds it with proper daily grouping and formatting. It will also
+    ensure the Data_Log sheet has the correct headers if they are missing.
     
     Returns:
         bool: True if successful, False otherwise
@@ -197,26 +198,40 @@ def regenerate_formatted_report() -> bool:
         Exception: If regeneration operation fails
     """
     try:
-        data_sheet = get_data_log_sheet_name()
-        report_sheet = get_formatted_report_sheet_name()
+        data_sheet_name = get_data_log_sheet_name()
+        report_sheet_name = get_formatted_report_sheet_name()
         
         logger.info("Starting formatted report regeneration...")
         
-        # Get all transactions from Data_Log
-        all_records = api.get_all_records(data_sheet)
+        # --- FIX STARTS HERE ---
+        # 1. Check if the Data_Log sheet has headers.
+        all_values = api.get_all_values(data_sheet_name)
+        
+        if not all_values or all_values[0] != DATA_LOG_COLUMNS:
+            # If the sheet is empty or headers are incorrect, create them.
+            logger.warning("Data_Log sheet is empty or has incorrect headers. Initializing...")
+            api.clear_worksheet(data_sheet_name)
+            api.append_row(data_sheet_name, DATA_LOG_COLUMNS)
+            # Re-fetch the values now that headers are present.
+            all_values = api.get_all_values(data_sheet_name)
+        
+        # 2. Get records safely now that we know headers exist.
+        all_records = api.get_all_records(data_sheet_name)
+        # --- FIX ENDS HERE ---
         
         if not all_records:
             logger.info("No data found in Data_Log, creating empty report")
-            return _create_empty_report(report_sheet)
+            return _create_empty_report(report_sheet_name)
         
         # Convert to DataFrame for easier processing
         df = pd.DataFrame(all_records)
         
-        # Ensure required columns exist
+        # This check is now less likely to fail, but it's good to keep
         required_columns = ['timestamp', 'transaction_type', 'category_or_source', 'description', 'amount']
         missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
-            raise ValueError(f"Missing required columns in Data_Log: {missing_columns}")
+            # This indicates a deeper problem if it still happens
+            raise ValueError(f"FATAL: Missing required columns in Data_Log even after header check: {missing_columns}")
         
         # Convert timestamp and amount columns
         df['timestamp'] = pd.to_datetime(df['timestamp'])
@@ -229,11 +244,11 @@ def regenerate_formatted_report() -> bool:
         report_content = _build_formatted_report_content(df)
         
         # Clear and update the Formatted_Report sheet
-        api.clear_worksheet(report_sheet)
+        api.clear_worksheet(report_sheet_name)
         
         if report_content:
             # Update the sheet with formatted content
-            api.update_range(report_sheet, 'A1', report_content)
+            api.update_range(report_sheet_name, 'A1', report_content)
         
         logger.info("Successfully regenerated formatted report")
         return True
@@ -241,7 +256,6 @@ def regenerate_formatted_report() -> bool:
     except Exception as e:
         logger.error(f"Failed to regenerate formatted report: {str(e)}")
         raise Exception(f"Failed to regenerate formatted report: {str(e)}")
-
 
 def _build_formatted_report_content(df: pd.DataFrame) -> List[List[str]]:
     """
