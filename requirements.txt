@@ -15,3 +15,5 @@ pandas
 
 # Required by gspread for authenticating with Google APIs using a service account
 google-auth-oauthlib
+
+gunicorn
