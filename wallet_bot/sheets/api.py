@@ -1,13 +1,8 @@
-"""
-Low-level Google Sheets API connector for the Messenger Wallet Bot.
-
-This module handles direct interactions with the Google Sheets API using the gspread library.
-It provides fundamental I/O operations like authentication, reading, writing, and clearing worksheets.
-This is an internal module that should only be called by wallet_bot.sheets.handler.py.
-"""
 
 import gspread
 import logging
+import os
+import json
 from typing import List, Dict, Any
 from google.oauth2.service_account import Credentials
 from gspread.exceptions import APIError, SpreadsheetNotFound, WorksheetNotFound
@@ -29,12 +24,13 @@ _spreadsheet = None
 def _authenticate() -> gspread.Client:
     """
     Authenticate with Google Sheets API using service account credentials.
+    Supports both environment variable and file-based authentication.
     
     Returns:
         gspread.Client: Authenticated client instance
         
     Raises:
-        Exception: If authentication fails or credentials file is not found
+        Exception: If authentication fails or credentials are not found
     """
     global _gc
     
@@ -42,16 +38,59 @@ def _authenticate() -> gspread.Client:
         return _gc
     
     try:
-        # --- THIS IS THE SECOND PART OF THE FIX ---
-        # We call get_credentials_path() as a method of the imported 'config' object.
-        credentials_path = config.get_credentials_path()
-        # ----------------------------------------
-        
         # Define the scope for Google Sheets and Drive APIs
         scope = [
             'https://spreadsheets.google.com/feeds',
             'https://www.googleapis.com/auth/drive'
         ]
+        
+        # Method 1: Try to get credentials from environment variable first
+        credentials_json = os.environ.get('GOOGLE_CREDENTIALS_JSON')
+        if credentials_json:
+            logger.info("Using Google credentials from environment variable")
+            try:
+                credentials_info = json.loads(credentials_json)
+                credentials = Credentials.from_service_account_info(
+                    credentials_info, 
+                    scopes=scope
+                )
+                _gc = gspread.authorize(credentials)
+                logger.info("Successfully authenticated with Google Sheets API using environment variable")
+                return _gc
+            except json.JSONDecodeError as e:
+                logger.error(f"Invalid JSON in GOOGLE_CREDENTIALS_JSON environment variable: {e}")
+                # Fall through to file-based method
+            except Exception as e:
+                logger.error(f"Failed to authenticate using environment variable: {e}")
+                # Fall through to file-based method
+        
+        # Method 2: Try file-based authentication
+        logger.info("Attempting file-based authentication")
+        credentials_path = config.get_credentials_path()
+        logger.info(f"Looking for credentials file at: {credentials_path}")
+        
+        # Check if the file exists
+        if not os.path.exists(credentials_path):
+            # Try alternative paths for Render deployment
+            alternative_paths = [
+                '/opt/render/project/credentials.json',
+                '/opt/render/project/src/credentials.json',
+                os.path.join(os.getcwd(), 'credentials.json'),
+                'credentials.json'
+            ]
+            
+            logger.info(f"File not found at {credentials_path}, trying alternative paths...")
+            credentials_path = None
+            
+            for alt_path in alternative_paths:
+                logger.info(f"Checking: {alt_path}")
+                if os.path.exists(alt_path):
+                    credentials_path = alt_path
+                    logger.info(f"Found credentials file at: {alt_path}")
+                    break
+            
+            if not credentials_path:
+                raise FileNotFoundError(f"Credentials file not found. Tried: {[config.get_credentials_path()] + alternative_paths}")
         
         # Load credentials from the service account file
         credentials = Credentials.from_service_account_file(
@@ -61,17 +100,18 @@ def _authenticate() -> gspread.Client:
         
         # Authorize and create client
         _gc = gspread.authorize(credentials)
-        logger.info("Successfully authenticated with Google Sheets API")
+        logger.info(f"Successfully authenticated with Google Sheets API using file: {credentials_path}")
         return _gc
         
-    except FileNotFoundError:
-        logger.error(f"Credentials file not found at: {config.get_credentials_path()}")
+    except FileNotFoundError as e:
+        logger.error(f"Credentials file not found: {str(e)}")
         raise Exception("Google Service Account credentials file not found")
     except Exception as e:
         logger.error(f"Authentication failed: {str(e)}")
         raise Exception(f"Failed to authenticate with Google Sheets API: {str(e)}")
 
 
+# Rest of your functions remain the same...
 def _get_spreadsheet() -> gspread.Spreadsheet:
     """
     Get the Google Spreadsheet instance.
@@ -127,8 +167,7 @@ def get_worksheet(sheet_name: str) -> gspread.Worksheet:
     except Exception as e:
         logger.error(f"Failed to access worksheet '{sheet_name}': {str(e)}")
         raise Exception(f"Failed to access worksheet '{sheet_name}': {str(e)}")
-
-
+    
 def append_row(sheet_name: str, row_data: List[Any]) -> bool:
     """
     Append a single row to the specified worksheet.
