@@ -515,39 +515,6 @@ def fix_data_log_headers() -> bool:
         logger.error(f"Failed to fix Data_Log headers: {str(e)}")
         return False
 
-
-def initialize_sheets() -> bool:
-    """
-    Initialize both Data_Log and Formatted_Report sheets with proper headers.
-    
-    Returns:
-        bool: True if successful, False otherwise
-        
-    Raises:
-        Exception: If initialization fails
-    """
-    try:
-        data_sheet = get_data_log_sheet_name()
-        report_sheet = get_formatted_report_sheet_name()
-        
-        logger.info("Initializing sheets...")
-        
-        # Fix Data_Log sheet headers first
-        if not fix_data_log_headers():
-            logger.error("Failed to fix Data_Log headers")
-            return False
-        
-        # Initialize Formatted_Report sheet with welcome message
-        _create_empty_report(report_sheet)
-        
-        logger.info("Successfully initialized both sheets")
-        return True
-        
-    except Exception as e:
-        logger.error(f"Failed to initialize sheets: {str(e)}")
-        raise Exception(f"Failed to initialize sheets: {str(e)}")
-
-
 # Add this diagnostic function to help troubleshoot
 def diagnose_sheet_structure() -> Dict[str, Any]:
     """
@@ -889,3 +856,224 @@ def backup_data() -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"Failed to create data backup: {str(e)}")
         raise Exception(f"Failed to create data backup: {str(e)}")
+
+
+def debug_amount_conversion(user_id: str):
+    """
+    Debug function to troubleshoot amount conversion issues.
+    """
+    try:
+        logger.info("=== DEBUGGING AMOUNT CONVERSION ===")
+        
+        # Get transactions for the user
+        transactions = get_transactions_for_period("This Week", user_id)
+        logger.info(f"Retrieved {len(transactions)} transactions")
+        
+        if not transactions:
+            logger.info("No transactions found")
+            return
+        
+        # Show raw transaction data
+        for i, transaction in enumerate(transactions):
+            logger.info(f"Transaction {i+1}:")
+            logger.info(f"  Type: {transaction.get('transaction_type')} ({type(transaction.get('transaction_type'))})")
+            logger.info(f"  Amount: {transaction.get('amount')} ({type(transaction.get('amount'))})")
+            logger.info(f"  Category: {transaction.get('category_or_source')}")
+            logger.info(f"  Description: {transaction.get('description')}")
+            
+            # Test amount conversion
+            amount_raw = transaction.get('amount')
+            try:
+                amount_converted = float(str(amount_raw).replace('₱', '').replace(',', '').strip())
+                logger.info(f"  Converted amount: {amount_converted}")
+            except Exception as e:
+                logger.error(f"  Conversion failed: {str(e)}")
+        
+        # Test DataFrame conversion
+        df = pd.DataFrame(transactions)
+        logger.info(f"DataFrame shape: {df.shape}")
+        logger.info(f"Amount column dtype: {df['amount'].dtype}")
+        logger.info(f"Amount column values: {df['amount'].tolist()}")
+        
+        # Test numeric conversion
+        df['amount_numeric'] = pd.to_numeric(df['amount'], errors='coerce')
+        logger.info(f"After pd.to_numeric: {df['amount_numeric'].tolist()}")
+        
+        # Manual conversion test
+        def manual_convert(val):
+            if isinstance(val, (int, float)):
+                return float(val)
+            return float(str(val).replace('₱', '').replace(',', '').strip())
+        
+        df['amount_manual'] = df['amount'].apply(manual_convert)
+        logger.info(f"After manual conversion: {df['amount_manual'].tolist()}")
+        
+        # Calculate sums
+        income_sum = df[df['transaction_type'] == 'income']['amount_manual'].sum()
+        expense_sum = df[df['transaction_type'] == 'expense']['amount_manual'].sum()
+        logger.info(f"Income sum: {income_sum}")
+        logger.info(f"Expense sum: {expense_sum}")
+        
+        logger.info("=== END DEBUG ===")
+        
+    except Exception as e:
+        logger.error(f"Debug function failed: {str(e)}")
+
+
+def analyze_financial_data(transactions: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Analyze financial data from transactions with improved data type handling.
+    
+    Args:
+        transactions (List[Dict[str, Any]]): List of transaction dictionaries
+        
+    Returns:
+        Dict[str, Any]: Analysis results with financial metrics
+    """
+    try:
+        if not transactions:
+            logger.info("No transactions to analyze")
+            return {
+                'total_income': 0,
+                'total_expenses': 0,
+                'net_savings': 0,
+                'transaction_count': 0,
+                'expense_categories': {},
+                'income_sources': {},
+                'insights': ["No transactions recorded yet."]
+            }
+        
+        logger.info(f"Analyzing {len(transactions)} transactions")
+        
+        # Convert to DataFrame for easier analysis
+        df = pd.DataFrame(transactions)
+        
+        # Debug: Print column info
+        logger.info(f"DataFrame columns: {list(df.columns)}")
+        logger.info(f"Amount column sample values: {df['amount'].head().tolist()}")
+        logger.info(f"Amount column data types: {df['amount'].dtype}")
+        
+        # FIXED: More robust amount conversion
+        # Handle different possible formats of amount data
+        def convert_amount(amount):
+            """Convert amount to float, handling various formats"""
+            if isinstance(amount, (int, float)):
+                return float(amount)
+            if isinstance(amount, str):
+                # Remove currency symbols and whitespace
+                cleaned = str(amount).replace('₱', '').replace(',', '').strip()
+                try:
+                    return float(cleaned)
+                except ValueError:
+                    logger.warning(f"Could not convert amount: {amount}")
+                    return 0.0
+            return 0.0
+        
+        # Apply the conversion function
+        df['amount_numeric'] = df['amount'].apply(convert_amount)
+        
+        # Debug: Check conversion results
+        logger.info(f"Converted amounts: {df['amount_numeric'].tolist()}")
+        logger.info(f"Amount numeric dtype: {df['amount_numeric'].dtype}")
+        
+        # Remove rows with zero amounts (failed conversions)
+        original_count = len(df)
+        df = df[df['amount_numeric'] > 0]
+        if len(df) < original_count:
+            logger.warning(f"Removed {original_count - len(df)} rows with invalid amounts")
+        
+        if df.empty:
+            logger.warning("No valid transactions after amount conversion")
+            return {
+                'total_income': 0,
+                'total_expenses': 0,
+                'net_savings': 0,
+                'transaction_count': 0,
+                'expense_categories': {},
+                'income_sources': {},
+                'insights': ["All transaction amounts were invalid."]
+            }
+        
+        # Separate income and expenses
+        income_df = df[df['transaction_type'] == 'income']
+        expense_df = df[df['transaction_type'] == 'expense']
+        
+        # Calculate totals using the numeric column
+        total_income = float(income_df['amount_numeric'].sum()) if not income_df.empty else 0
+        total_expenses = float(expense_df['amount_numeric'].sum()) if not expense_df.empty else 0
+        net_savings = total_income - total_expenses
+        
+        # Debug: Print calculation results
+        logger.info(f"Income transactions: {len(income_df)}")
+        logger.info(f"Expense transactions: {len(expense_df)}")
+        logger.info(f"Total income calculated: {total_income}")
+        logger.info(f"Total expenses calculated: {total_expenses}")
+        logger.info(f"Net savings: {net_savings}")
+        
+        # Analyze categories and sources
+        expense_categories = {}
+        if not expense_df.empty:
+            expense_categories = expense_df.groupby('category_or_source')['amount_numeric'].sum().to_dict()
+            # Convert to regular floats
+            expense_categories = {k: float(v) for k, v in expense_categories.items()}
+        
+        income_sources = {}
+        if not income_df.empty:
+            income_sources = income_df.groupby('category_or_source')['amount_numeric'].sum().to_dict()
+            # Convert to regular floats
+            income_sources = {k: float(v) for k, v in income_sources.items()}
+        
+        # Generate insights
+        insights = []
+        
+        if total_income > 0 and total_expenses > 0:
+            savings_rate = (net_savings / total_income) * 100
+            if savings_rate > 20:
+                insights.append(f"Excellent! You're saving {savings_rate:.1f}% of your income.")
+            elif savings_rate > 10:
+                insights.append(f"Good job! You're saving {savings_rate:.1f}% of your income.")
+            elif savings_rate > 0:
+                insights.append(f"You're saving {savings_rate:.1f}% of your income. Try to increase this!")
+            else:
+                insights.append("You're spending more than you earn. Consider reducing expenses.")
+        elif total_income > 0:
+            insights.append("Great! You've logged income but no expenses yet.")
+        elif total_expenses > 0:
+            insights.append("You've logged expenses but no income yet. Don't forget to track your earnings!")
+        else:
+            insights.append("Start tracking both income and expenses to get valuable insights!")
+        
+        # Category insights
+        if expense_categories:
+            top_category = max(expense_categories.items(), key=lambda x: x[1])
+            insights.append(f"Your biggest expense category is {top_category[0]} (₱{top_category[1]:,.2f}).")
+        
+        if total_income > 0:
+            tithe_suggestion = total_income * 0.1
+            insights.append(f"Consider setting aside ₱{tithe_suggestion:,.2f} (10%) for tithing or donations.")
+        
+        # Format the results
+        result = {
+            'total_income': total_income,
+            'total_expenses': total_expenses,
+            'net_savings': net_savings,
+            'transaction_count': len(df),
+            'expense_categories': expense_categories,
+            'income_sources': income_sources,
+            'insights': insights
+        }
+        
+        logger.info(f"Analysis complete: Income=₱{total_income:,.2f}, Expenses=₱{total_expenses:,.2f}, Net=₱{net_savings:,.2f}")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Failed to analyze financial data: {str(e)}")
+        return {
+            'total_income': 0,
+            'total_expenses': 0,
+            'net_savings': 0,
+            'transaction_count': 0,
+            'expense_categories': {},
+            'income_sources': {},
+            'insights': [f"Error analyzing data: {str(e)}"]
+        }
