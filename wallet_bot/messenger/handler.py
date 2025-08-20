@@ -17,6 +17,7 @@ from wallet_bot.messenger.api import (
 )
 from wallet_bot.sheets.handler import log_transaction, get_transactions_for_period, regenerate_formatted_report
 from wallet_bot.analytics.generator import generate_report
+from wallet_bot.utils.timezone import format_manila_timestamp
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -514,9 +515,9 @@ def _log_expense_transaction(user_id: str, amount: float, description: str, cate
 def _log_income_transaction(user_id: str, amount: float, description: str, source: str) -> bool:
     """Log income transaction to Google Sheets."""
     try:
-        # Prepare transaction data
+        # Prepare transaction data (using Manila timezone)
         transaction_data = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": format_manila_timestamp(),
             "user_id": user_id,
             "type": "income",
             "amount": amount,

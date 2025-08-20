@@ -19,6 +19,14 @@ from wallet_bot.config.settings import (
     get_data_log_sheet_name,
     get_formatted_report_sheet_name
 )
+from wallet_bot.utils.timezone import (
+    now_manila,
+    format_manila_timestamp,
+    get_week_start_manila,
+    get_month_start_manila,
+    parse_manila_timestamp,
+    MANILA_TIMEZONE
+)
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -63,8 +71,8 @@ def log_transaction(transaction_type: str, category_or_source: str,
         if not category_or_source or not description:
             raise ValueError("Category/source and description cannot be empty")
         
-        # Create timestamp
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        # Create timestamp in Manila timezone
+        timestamp = format_manila_timestamp()
         
         # Prepare row data
         row_data = [
@@ -186,7 +194,7 @@ def get_transactions_for_period(period: str = "This Week", user_id: Optional[str
 
 def _filter_transactions_by_period_fixed(df: pd.DataFrame, period: str) -> pd.DataFrame:
     """
-    FIXED: Filter transactions DataFrame by the specified time period.
+    FIXED: Filter transactions DataFrame by the specified time period using Manila timezone.
     
     Args:
         df (pd.DataFrame): DataFrame with transaction data
@@ -195,33 +203,27 @@ def _filter_transactions_by_period_fixed(df: pd.DataFrame, period: str) -> pd.Da
     Returns:
         pd.DataFrame: Filtered DataFrame
     """
-    from datetime import datetime, timedelta
+    # Use Manila timezone for all date calculations
+    now_manila_time = now_manila()
     
-    now = datetime.now()
-    
-    # Debug: Show current time
-    logger.info(f"DEBUG: Current time: {now}")
+    # Debug: Show current time in Manila
+    logger.info(f"DEBUG: Current Manila time: {now_manila_time}")
     logger.info(f"DEBUG: Filtering for period: '{period}'")
     
     if period == "This Week":
-        # FIXED: Calculate start of week properly
-        days_since_monday = now.weekday()  # Monday = 0, Sunday = 6
-        start_of_week = now - timedelta(days=days_since_monday)
-        # Set to start of day (midnight)
-        start_of_week = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
-        cutoff = start_of_week
+        # Get start of week in Manila timezone
+        cutoff = get_week_start_manila(now_manila_time)
         
     elif period == "This Month":
-        # FIXED: Calculate start of month properly
-        start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        cutoff = start_of_month
+        # Get start of month in Manila timezone
+        cutoff = get_month_start_manila(now_manila_time)
         
     else:
         logger.warning(f"Unknown period '{period}', returning all transactions")
         return df
     
     # Debug: Show cutoff date
-    logger.info(f"DEBUG: Cutoff date: {cutoff}")
+    logger.info(f"DEBUG: Cutoff date (Manila): {cutoff}")
     
     # Debug: Show date range of transactions
     if not df.empty:
@@ -229,9 +231,12 @@ def _filter_transactions_by_period_fixed(df: pd.DataFrame, period: str) -> pd.Da
         max_date = df['timestamp'].max()
         logger.info(f"DEBUG: Transaction date range: {min_date} to {max_date}")
     
+    # Convert cutoff to naive datetime for comparison with parsed timestamps
+    # (since the timestamps from sheets are parsed as naive datetime)
+    cutoff_naive = cutoff.replace(tzinfo=None)
+    cutoff_timestamp = pd.Timestamp(cutoff_naive)
+    
     # Filter transactions after cutoff date
-    # FIXED: Convert cutoff to pandas Timestamp for proper comparison
-    cutoff_timestamp = pd.Timestamp(cutoff)
     filtered_df = df[df['timestamp'] >= cutoff_timestamp]
     
     logger.info(f"DEBUG: Filtered {len(df)} transactions to {len(filtered_df)} for period '{period}'")

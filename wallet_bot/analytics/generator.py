@@ -18,6 +18,11 @@ structures and knows nothing about Google Sheets or Messenger APIs.
 import pandas as pd
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
+from wallet_bot.utils.timezone import (
+    now_manila,
+    get_week_start_manila,
+    get_month_start_manila
+)
 
 
 def generate_report(transactions: List[Dict[str, Any]], period: str = "This Week") -> str:
@@ -117,29 +122,29 @@ def _prepare_dataframe(transactions: List[Dict[str, Any]], period: str) -> pd.Da
 
 def _filter_by_period(df: pd.DataFrame, period: str) -> pd.DataFrame:
     """
-    Filter DataFrame to include only transactions from the specified period.
+    Filter DataFrame to include only transactions from the specified period using Manila timezone.
     """
     if df.empty or 'timestamp' not in df.columns:
         return df
     
-    now = datetime.now()
+    # Use Manila timezone for period calculations
+    now_manila_time = now_manila()
     
     if period == "This Week":
-        # Get start of current week (Monday)
-        days_since_monday = now.weekday()
-        week_start = now - timedelta(days=days_since_monday)
-        week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
-        cutoff_date = week_start
+        # Get start of current week in Manila timezone
+        cutoff_date = get_week_start_manila(now_manila_time)
     elif period == "This Month":
-        # Get start of current month
-        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        cutoff_date = month_start
+        # Get start of current month in Manila timezone
+        cutoff_date = get_month_start_manila(now_manila_time)
     else:
         # Default to past 7 days if period not recognized
-        cutoff_date = now - timedelta(days=7)
+        cutoff_date = now_manila_time - timedelta(days=7)
+    
+    # Convert cutoff to naive datetime for comparison (since timestamps from sheets are naive)
+    cutoff_naive = cutoff_date.replace(tzinfo=None) if cutoff_date.tzinfo else cutoff_date
     
     # Filter transactions
-    filtered_df = df[df['timestamp'] >= cutoff_date].copy()
+    filtered_df = df[df['timestamp'] >= cutoff_naive].copy()
     return filtered_df
 
 
