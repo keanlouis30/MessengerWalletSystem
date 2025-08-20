@@ -132,10 +132,6 @@ def create_app():
                     raise
                 return False
 
-    @app.before_first_request
-    def initialize_on_first_request():
-        """Initialize the app on first request for hosting platforms."""
-        ensure_initialization()
 
     @app.route('/', methods=['GET'])
     def health_check():
@@ -275,6 +271,9 @@ def create_app():
         logger.error(f"Unhandled exception: {str(e)}", exc_info=True)
         return jsonify({'error': 'Internal server error'}), 500
 
+    with app.app_context():
+        ensure_initialization()
+        
     # Graceful shutdown handlers
     def cleanup():
         """Cleanup function for graceful shutdown"""
