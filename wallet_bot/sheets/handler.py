@@ -110,13 +110,24 @@ def get_transactions_for_period(period: str = "This Week", user_id: Optional[str
         # Get all records from Data_Log
         all_records = api.get_all_records(sheet_name)
         
+        # Debug logging
+        logger.info(f"DEBUG: Retrieved {len(all_records)} total records from sheet")
+        logger.info(f"DEBUG: Looking for period='{period}', user_id='{user_id}'")
+        
         if not all_records:
             logger.info("No transactions found in Data_Log sheet")
             return []
         
-        # Filter by user_id if specified
+        # Debug: Show sample record
+        if all_records:
+            logger.info(f"DEBUG: Sample record: {all_records[0]}")
+        
+        # Filter by user_id if specified - FIXED: Convert both to strings for comparison
         if user_id:
-            all_records = [record for record in all_records if record.get('user_id') == user_id]
+            original_count = len(all_records)
+            # Convert both user_id values to strings for reliable comparison
+            all_records = [record for record in all_records if str(record.get('user_id', '')) == str(user_id)]
+            logger.info(f"DEBUG: Filtered from {original_count} to {len(all_records)} records for user_id '{user_id}'")
         
         # Convert to DataFrame for easier date filtering
         df = pd.DataFrame(all_records)
@@ -125,19 +136,42 @@ def get_transactions_for_period(period: str = "This Week", user_id: Optional[str
             logger.info(f"No transactions found for user: {user_id}")
             return []
         
+        # Debug: Show DataFrame info
+        logger.info(f"DEBUG: DataFrame shape: {df.shape}")
+        logger.info(f"DEBUG: DataFrame columns: {list(df.columns)}")
+        
         # Ensure timestamp column exists and convert to datetime
         if 'timestamp' not in df.columns:
             logger.warning("No timestamp column found in Data_Log")
             return all_records
         
         try:
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            # Debug: Show sample timestamps before conversion
+            logger.info(f"DEBUG: Sample timestamps before conversion: {df['timestamp'].head().tolist()}")
+            
+            df['timestamp'] = pd.to_datetime(df['timestamp'], format='%Y-%m-%d %H:%M:%S', errors='coerce')
+            
+            # Check for any failed conversions
+            failed_conversions = df['timestamp'].isna().sum()
+            if failed_conversions > 0:
+                logger.warning(f"DEBUG: {failed_conversions} timestamps failed to convert")
+            
+            # Debug: Show sample timestamps after conversion
+            logger.info(f"DEBUG: Sample timestamps after conversion: {df['timestamp'].head().tolist()}")
+            
         except Exception as e:
             logger.warning(f"Could not parse timestamps: {str(e)}")
             return all_records
         
-        # Filter by period
-        filtered_df = _filter_transactions_by_period(df, period)
+        # Remove rows with invalid timestamps
+        df = df.dropna(subset=['timestamp'])
+        
+        if df.empty:
+            logger.info("No valid timestamps found after conversion")
+            return []
+        
+        # Filter by period - FIXED: Better date calculation logic
+        filtered_df = _filter_transactions_by_period_fixed(df, period)
         
         # Convert back to list of dictionaries
         transactions = filtered_df.to_dict('records')
@@ -149,6 +183,125 @@ def get_transactions_for_period(period: str = "This Week", user_id: Optional[str
         logger.error(f"Failed to get transactions for period '{period}': {str(e)}")
         raise Exception(f"Failed to retrieve transactions: {str(e)}")
 
+
+def _filter_transactions_by_period_fixed(df: pd.DataFrame, period: str) -> pd.DataFrame:
+    """
+    FIXED: Filter transactions DataFrame by the specified time period.
+    
+    Args:
+        df (pd.DataFrame): DataFrame with transaction data
+        period (str): "This Week" or "This Month"
+        
+    Returns:
+        pd.DataFrame: Filtered DataFrame
+    """
+    from datetime import datetime, timedelta
+    
+    now = datetime.now()
+    
+    # Debug: Show current time
+    logger.info(f"DEBUG: Current time: {now}")
+    logger.info(f"DEBUG: Filtering for period: '{period}'")
+    
+    if period == "This Week":
+        # FIXED: Calculate start of week properly
+        days_since_monday = now.weekday()  # Monday = 0, Sunday = 6
+        start_of_week = now - timedelta(days=days_since_monday)
+        # Set to start of day (midnight)
+        start_of_week = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
+        cutoff = start_of_week
+        
+    elif period == "This Month":
+        # FIXED: Calculate start of month properly
+        start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        cutoff = start_of_month
+        
+    else:
+        logger.warning(f"Unknown period '{period}', returning all transactions")
+        return df
+    
+    # Debug: Show cutoff date
+    logger.info(f"DEBUG: Cutoff date: {cutoff}")
+    
+    # Debug: Show date range of transactions
+    if not df.empty:
+        min_date = df['timestamp'].min()
+        max_date = df['timestamp'].max()
+        logger.info(f"DEBUG: Transaction date range: {min_date} to {max_date}")
+    
+    # Filter transactions after cutoff date
+    # FIXED: Convert cutoff to pandas Timestamp for proper comparison
+    cutoff_timestamp = pd.Timestamp(cutoff)
+    filtered_df = df[df['timestamp'] >= cutoff_timestamp]
+    
+    logger.info(f"DEBUG: Filtered {len(df)} transactions to {len(filtered_df)} for period '{period}'")
+    
+    # Debug: Show some sample dates from filtered results
+    if not filtered_df.empty:
+        sample_dates = filtered_df['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S').head(3).tolist()
+        logger.info(f"DEBUG: Sample filtered dates: {sample_dates}")
+    
+    return filtered_df
+
+
+# Additional debug function you can add to test manually:
+def debug_date_filtering(user_id: str):
+    """
+    Debug function to help troubleshoot date filtering issues.
+    Call this function manually to see what's happening.
+    """
+    try:
+        logger.info("=== DEBUG DATE FILTERING ===")
+        
+        # Get raw data
+        sheet_name = get_data_log_sheet_name()
+        all_records = api.get_all_records(sheet_name)
+        
+        logger.info(f"Total records: {len(all_records)}")
+        
+        if all_records:
+            logger.info(f"Sample record: {all_records[0]}")
+        
+        # Filter by user
+        user_records = [r for r in all_records if str(r.get('user_id', '')) == str(user_id)]
+        logger.info(f"User records: {len(user_records)}")
+        
+        if user_records:
+            logger.info(f"Sample user record: {user_records[0]}")
+            
+            # Test timestamp parsing
+            sample_timestamp = user_records[0].get('timestamp')
+            logger.info(f"Sample timestamp: '{sample_timestamp}' (type: {type(sample_timestamp)})")
+            
+            try:
+                parsed_time = pd.to_datetime(sample_timestamp, format='%Y-%m-%d %H:%M:%S')
+                logger.info(f"Parsed timestamp: {parsed_time}")
+                
+                # Test date calculations
+                now = datetime.now()
+                logger.info(f"Current time: {now}")
+                
+                # This week calculation
+                days_since_monday = now.weekday()
+                start_of_week = now - timedelta(days=days_since_monday)
+                start_of_week = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
+                logger.info(f"Start of week: {start_of_week}")
+                
+                # Check if transaction is this week
+                is_this_week = parsed_time >= pd.Timestamp(start_of_week)
+                logger.info(f"Is transaction from this week? {is_this_week}")
+                
+                # Time difference
+                diff = parsed_time - pd.Timestamp(start_of_week)
+                logger.info(f"Time difference: {diff}")
+                
+            except Exception as e:
+                logger.error(f"Error parsing timestamp: {str(e)}")
+        
+        logger.info("=== END DEBUG ===")
+        
+    except Exception as e:
+        logger.error(f"Debug function failed: {str(e)}")
 
 def _filter_transactions_by_period(df: pd.DataFrame, period: str) -> pd.DataFrame:
     """
