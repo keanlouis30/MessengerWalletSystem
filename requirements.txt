@@ -1,0 +1,17 @@
+# Web server framework to handle webhook requests from Meta
+flask
+
+# For making HTTP requests to the Meta Messenger API
+requests
+
+# To load environment variables from the .env file
+python-dotenv
+
+# The primary library for interacting with the Google Sheets API
+gspread
+
+# For data analysis and manipulation in the analytics module
+pandas
+
+# Required by gspread for authenticating with Google APIs using a service account
+google-auth-oauthlib

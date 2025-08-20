@@ -1,0 +1,14 @@
+# Python virtual environment
+venv/
+__pycache__/
+*.pyc
+
+# Environment variables
+.env
+
+# Google Service Account Credentials
+wallet_bot/config/credentials.json
+
+# IDE specific files
+.idea/
+.vscode/
