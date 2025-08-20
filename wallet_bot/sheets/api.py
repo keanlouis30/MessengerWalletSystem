@@ -1,9 +1,8 @@
-
 import gspread
 import logging
 import os
 import json
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from google.oauth2.service_account import Credentials
 from gspread.exceptions import APIError, SpreadsheetNotFound, WorksheetNotFound
 
@@ -19,6 +18,37 @@ logger = logging.getLogger(__name__)
 # Global variables for connection management
 _gc = None
 _spreadsheet = None
+
+# Default worksheet configurations
+DEFAULT_WORKSHEET_CONFIGS = {
+    'Data_Log': {
+        'rows': 1000,
+        'cols': 20,
+        'headers': [
+            'Timestamp', 'Type', 'Amount', 'Currency', 'Description', 
+            'Category', 'Source', 'Destination', 'Status', 'Reference',
+            'User_ID', 'Session_ID', 'IP_Address', 'User_Agent', 'Notes',
+            'Created_At', 'Updated_At', 'Version', 'Hash', 'Extra_Data'
+        ]
+    },
+    'Formatted_Report': {
+        'rows': 500,
+        'cols': 15,
+        'headers': [
+            'Date', 'Transaction_Type', 'Amount', 'Currency', 'Description',
+            'Category', 'Balance_Before', 'Balance_After', 'Status', 'Reference_ID',
+            'User', 'Location', 'Method', 'Fees', 'Notes'
+        ]
+    },
+    'Summary': {
+        'rows': 100,
+        'cols': 10,
+        'headers': [
+            'Period', 'Total_Income', 'Total_Expenses', 'Net_Amount', 'Transaction_Count',
+            'Average_Transaction', 'Largest_Transaction', 'Categories_Used', 'Active_Users', 'Last_Updated'
+        ]
+    }
+}
 
 
 def _authenticate() -> gspread.Client:
@@ -111,7 +141,6 @@ def _authenticate() -> gspread.Client:
         raise Exception(f"Failed to authenticate with Google Sheets API: {str(e)}")
 
 
-# Rest of your functions remain the same...
 def _get_spreadsheet() -> gspread.Spreadsheet:
     """
     Get the Google Spreadsheet instance.
@@ -142,12 +171,62 @@ def _get_spreadsheet() -> gspread.Spreadsheet:
         raise Exception(f"Failed to access Google Spreadsheet: {str(e)}")
 
 
-def get_worksheet(sheet_name: str) -> gspread.Worksheet:
+def create_worksheet(sheet_name: str, rows: int = 1000, cols: int = 26, headers: Optional[List[str]] = None) -> gspread.Worksheet:
     """
-    Get a specific worksheet by name.
+    Create a new worksheet with the specified parameters.
+    
+    Args:
+        sheet_name (str): Name of the worksheet to create
+        rows (int): Number of rows for the worksheet
+        cols (int): Number of columns for the worksheet
+        headers (Optional[List[str]]): Headers to add to the first row
+        
+    Returns:
+        gspread.Worksheet: The newly created worksheet
+        
+    Raises:
+        Exception: If worksheet creation fails
+    """
+    try:
+        spreadsheet = _get_spreadsheet()
+        
+        # Create the worksheet
+        worksheet = spreadsheet.add_worksheet(title=sheet_name, rows=rows, cols=cols)
+        logger.info(f"Successfully created worksheet: '{sheet_name}' with {rows} rows and {cols} columns")
+        
+        # Add headers if provided
+        if headers:
+            try:
+                # Convert headers to strings and pad with empty strings if needed
+                formatted_headers = [str(header) for header in headers]
+                if len(formatted_headers) > cols:
+                    logger.warning(f"Headers ({len(formatted_headers)}) exceed columns ({cols}). Truncating.")
+                    formatted_headers = formatted_headers[:cols]
+                elif len(formatted_headers) < cols:
+                    formatted_headers.extend([''] * (cols - len(formatted_headers)))
+                
+                worksheet.update('1:1', [formatted_headers])
+                logger.info(f"Successfully added {len(headers)} headers to worksheet '{sheet_name}'")
+            except Exception as e:
+                logger.warning(f"Failed to add headers to worksheet '{sheet_name}': {str(e)}")
+        
+        return worksheet
+        
+    except APIError as e:
+        logger.error(f"API error when creating worksheet '{sheet_name}': {str(e)}")
+        raise Exception(f"Failed to create worksheet due to API error: {str(e)}")
+    except Exception as e:
+        logger.error(f"Failed to create worksheet '{sheet_name}': {str(e)}")
+        raise Exception(f"Failed to create worksheet: {str(e)}")
+
+
+def get_worksheet(sheet_name: str, auto_create: bool = True) -> gspread.Worksheet:
+    """
+    Get a specific worksheet by name. Creates it if it doesn't exist and auto_create is True.
     
     Args:
         sheet_name (str): Name of the worksheet to retrieve
+        auto_create (bool): Whether to create the worksheet if it doesn't exist
         
     Returns:
         gspread.Worksheet: The worksheet instance
@@ -158,23 +237,83 @@ def get_worksheet(sheet_name: str) -> gspread.Worksheet:
     try:
         spreadsheet = _get_spreadsheet()
         worksheet = spreadsheet.worksheet(sheet_name)
-        logger.debug(f"Successfully accessed worksheet: {sheet_name}")
+        logger.debug(f"Successfully accessed existing worksheet: {sheet_name}")
         return worksheet
         
     except WorksheetNotFound:
-        logger.error(f"Worksheet '{sheet_name}' not found")
-        raise Exception(f"Worksheet '{sheet_name}' not found in spreadsheet")
+        if auto_create:
+            logger.info(f"Worksheet '{sheet_name}' not found. Creating it...")
+            
+            # Use default configuration if available
+            if sheet_name in DEFAULT_WORKSHEET_CONFIGS:
+                config = DEFAULT_WORKSHEET_CONFIGS[sheet_name]
+                worksheet = create_worksheet(
+                    sheet_name=sheet_name,
+                    rows=config['rows'],
+                    cols=config['cols'],
+                    headers=config['headers']
+                )
+            else:
+                # Create with default parameters
+                worksheet = create_worksheet(sheet_name=sheet_name)
+            
+            logger.info(f"Successfully created and accessed worksheet: {sheet_name}")
+            return worksheet
+        else:
+            logger.error(f"Worksheet '{sheet_name}' not found and auto_create is disabled")
+            raise Exception(f"Worksheet '{sheet_name}' not found in spreadsheet")
+            
     except Exception as e:
         logger.error(f"Failed to access worksheet '{sheet_name}': {str(e)}")
         raise Exception(f"Failed to access worksheet '{sheet_name}': {str(e)}")
+
+
+def ensure_worksheet_exists(sheet_name: str) -> bool:
+    """
+    Ensure a worksheet exists, creating it if necessary.
     
-def append_row(sheet_name: str, row_data: List[Any]) -> bool:
+    Args:
+        sheet_name (str): Name of the worksheet
+        
+    Returns:
+        bool: True if worksheet exists or was created successfully
+    """
+    try:
+        get_worksheet(sheet_name, auto_create=True)
+        return True
+    except Exception as e:
+        logger.error(f"Failed to ensure worksheet '{sheet_name}' exists: {str(e)}")
+        return False
+
+
+def initialize_default_worksheets() -> Dict[str, bool]:
+    """
+    Initialize all default worksheets defined in DEFAULT_WORKSHEET_CONFIGS.
+    
+    Returns:
+        Dict[str, bool]: Dictionary showing success status for each worksheet
+    """
+    results = {}
+    
+    for sheet_name in DEFAULT_WORKSHEET_CONFIGS.keys():
+        try:
+            ensure_worksheet_exists(sheet_name)
+            results[sheet_name] = True
+            logger.info(f"Successfully initialized worksheet: {sheet_name}")
+        except Exception as e:
+            results[sheet_name] = False
+            logger.error(f"Failed to initialize worksheet '{sheet_name}': {str(e)}")
+    
+    return results
+    
+def append_row(sheet_name: str, row_data: List[Any], auto_create: bool = True) -> bool:
     """
     Append a single row to the specified worksheet.
     
     Args:
         sheet_name (str): Name of the worksheet
         row_data (List[Any]): List of values to append as a new row
+        auto_create (bool): Whether to create the worksheet if it doesn't exist
         
     Returns:
         bool: True if successful, False otherwise
@@ -183,7 +322,7 @@ def append_row(sheet_name: str, row_data: List[Any]) -> bool:
         Exception: If append operation fails
     """
     try:
-        worksheet = get_worksheet(sheet_name)
+        worksheet = get_worksheet(sheet_name, auto_create=auto_create)
         
         # Convert all values to strings to ensure compatibility
         formatted_row = [str(value) if value is not None else "" for value in row_data]
@@ -200,15 +339,13 @@ def append_row(sheet_name: str, row_data: List[Any]) -> bool:
         raise Exception(f"Failed to append row to worksheet: {str(e)}")
 
 
-# (The rest of your functions: get_all_records, get_all_values, clear_worksheet, etc., can remain exactly as they were)
-# I am omitting them here for brevity, but you should keep them in your file.
-# The only changes required are at the very top of the file.
-def get_all_records(sheet_name: str) -> List[Dict[str, Any]]:
+def get_all_records(sheet_name: str, auto_create: bool = True) -> List[Dict[str, Any]]:
     """
     Get all records from a worksheet as a list of dictionaries.
     
     Args:
         sheet_name (str): Name of the worksheet
+        auto_create (bool): Whether to create the worksheet if it doesn't exist
         
     Returns:
         List[Dict[str, Any]]: List of records where each record is a dictionary
@@ -218,7 +355,7 @@ def get_all_records(sheet_name: str) -> List[Dict[str, Any]]:
         Exception: If reading operation fails
     """
     try:
-        worksheet = get_worksheet(sheet_name)
+        worksheet = get_worksheet(sheet_name, auto_create=auto_create)
         
         # Get all records as dictionaries
         records = worksheet.get_all_records()
@@ -233,12 +370,13 @@ def get_all_records(sheet_name: str) -> List[Dict[str, Any]]:
         raise Exception(f"Failed to read records from worksheet: {str(e)}")
 
 
-def get_all_values(sheet_name: str) -> List[List[str]]:
+def get_all_values(sheet_name: str, auto_create: bool = True) -> List[List[str]]:
     """
     Get all values from a worksheet as a list of lists.
     
     Args:
         sheet_name (str): Name of the worksheet
+        auto_create (bool): Whether to create the worksheet if it doesn't exist
         
     Returns:
         List[List[str]]: All values in the worksheet, including headers
@@ -247,7 +385,7 @@ def get_all_values(sheet_name: str) -> List[List[str]]:
         Exception: If reading operation fails
     """
     try:
-        worksheet = get_worksheet(sheet_name)
+        worksheet = get_worksheet(sheet_name, auto_create=auto_create)
         
         # Get all values including headers
         values = worksheet.get_all_values()
@@ -262,12 +400,13 @@ def get_all_values(sheet_name: str) -> List[List[str]]:
         raise Exception(f"Failed to read values from worksheet: {str(e)}")
 
 
-def clear_worksheet(sheet_name: str) -> bool:
+def clear_worksheet(sheet_name: str, auto_create: bool = True) -> bool:
     """
     Clear all content from a worksheet.
     
     Args:
         sheet_name (str): Name of the worksheet to clear
+        auto_create (bool): Whether to create the worksheet if it doesn't exist
         
     Returns:
         bool: True if successful, False otherwise
@@ -276,7 +415,7 @@ def clear_worksheet(sheet_name: str) -> bool:
         Exception: If clear operation fails
     """
     try:
-        worksheet = get_worksheet(sheet_name)
+        worksheet = get_worksheet(sheet_name, auto_create=auto_create)
         
         # Clear all content
         worksheet.clear()
@@ -291,7 +430,7 @@ def clear_worksheet(sheet_name: str) -> bool:
         raise Exception(f"Failed to clear worksheet: {str(e)}")
 
 
-def update_range(sheet_name: str, range_name: str, values: List[List[Any]]) -> bool:
+def update_range(sheet_name: str, range_name: str, values: List[List[Any]], auto_create: bool = True) -> bool:
     """
     Update a specific range in the worksheet with new values.
     
@@ -299,6 +438,7 @@ def update_range(sheet_name: str, range_name: str, values: List[List[Any]]) -> b
         sheet_name (str): Name of the worksheet
         range_name (str): Range to update (e.g., 'A1:C3')
         values (List[List[Any]]): 2D list of values to update
+        auto_create (bool): Whether to create the worksheet if it doesn't exist
         
     Returns:
         bool: True if successful, False otherwise
@@ -307,7 +447,7 @@ def update_range(sheet_name: str, range_name: str, values: List[List[Any]]) -> b
         Exception: If update operation fails
     """
     try:
-        worksheet = get_worksheet(sheet_name)
+        worksheet = get_worksheet(sheet_name, auto_create=auto_create)
         
         # Convert all values to strings
         formatted_values = [
@@ -327,7 +467,7 @@ def update_range(sheet_name: str, range_name: str, values: List[List[Any]]) -> b
         raise Exception(f"Failed to update range in worksheet: {str(e)}")
 
 
-def batch_update(sheet_name: str, updates: List[Dict[str, Any]]) -> bool:
+def batch_update(sheet_name: str, updates: List[Dict[str, Any]], auto_create: bool = True) -> bool:
     """
     Perform multiple updates to a worksheet in a single API call.
     
@@ -335,6 +475,7 @@ def batch_update(sheet_name: str, updates: List[Dict[str, Any]]) -> bool:
         sheet_name (str): Name of the worksheet
         updates (List[Dict[str, Any]]): List of update operations
                                        Each dict should have 'range' and 'values' keys
+        auto_create (bool): Whether to create the worksheet if it doesn't exist
         
     Returns:
         bool: True if successful, False otherwise
@@ -343,7 +484,7 @@ def batch_update(sheet_name: str, updates: List[Dict[str, Any]]) -> bool:
         Exception: If batch update operation fails
     """
     try:
-        worksheet = get_worksheet(sheet_name)
+        worksheet = get_worksheet(sheet_name, auto_create=auto_create)
         
         # Format updates for batch operation
         formatted_updates = []
@@ -369,12 +510,13 @@ def batch_update(sheet_name: str, updates: List[Dict[str, Any]]) -> bool:
         raise Exception(f"Failed to perform batch update: {str(e)}")
 
 
-def get_worksheet_info(sheet_name: str) -> Dict[str, Any]:
+def get_worksheet_info(sheet_name: str, auto_create: bool = True) -> Dict[str, Any]:
     """
     Get information about a worksheet (row count, column count, etc.).
     
     Args:
         sheet_name (str): Name of the worksheet
+        auto_create (bool): Whether to create the worksheet if it doesn't exist
         
     Returns:
         Dict[str, Any]: Dictionary containing worksheet information
@@ -383,7 +525,7 @@ def get_worksheet_info(sheet_name: str) -> Dict[str, Any]:
         Exception: If operation fails
     """
     try:
-        worksheet = get_worksheet(sheet_name)
+        worksheet = get_worksheet(sheet_name, auto_create=auto_create)
         
         info = {
             'title': worksheet.title,
@@ -415,7 +557,7 @@ def reset_connection():
 
 def test_connection() -> bool:
     """
-    Test the connection to Google Sheets API.
+    Test the connection to Google Sheets API and initialize default worksheets.
     
     Returns:
         bool: True if connection is working, False otherwise
@@ -423,8 +565,18 @@ def test_connection() -> bool:
     try:
         spreadsheet = _get_spreadsheet()
         # Try to get basic spreadsheet info
-        _ = spreadsheet.title
-        logger.info("Google Sheets API connection test successful")
+        title = spreadsheet.title
+        logger.info(f"Google Sheets API connection test successful for: {title}")
+        
+        # Initialize default worksheets
+        logger.info("Initializing default worksheets...")
+        results = initialize_default_worksheets()
+        
+        success_count = sum(1 for success in results.values() if success)
+        total_count = len(results)
+        
+        logger.info(f"Worksheet initialization complete: {success_count}/{total_count} successful")
+        
         return True
         
     except Exception as e:
