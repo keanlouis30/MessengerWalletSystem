@@ -8,11 +8,15 @@ This is an internal module that should only be called by wallet_bot.sheets.handl
 
 import gspread
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from google.oauth2.service_account import Credentials
 from gspread.exceptions import APIError, SpreadsheetNotFound, WorksheetNotFound
 
+# --- THIS IS THE CRITICAL FIX ---
+# We import the 'config' object and the 'get_google_sheet_id' function.
+# We will use the 'config' object to call the get_credentials_path method.
 from wallet_bot.config.settings import config, get_google_sheet_id
+# -----------------------------
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -38,7 +42,10 @@ def _authenticate() -> gspread.Client:
         return _gc
     
     try:
-        credentials_path = get_credentials_path()
+        # --- THIS IS THE SECOND PART OF THE FIX ---
+        # We call get_credentials_path() as a method of the imported 'config' object.
+        credentials_path = config.get_credentials_path()
+        # ----------------------------------------
         
         # Define the scope for Google Sheets and Drive APIs
         scope = [
@@ -58,7 +65,7 @@ def _authenticate() -> gspread.Client:
         return _gc
         
     except FileNotFoundError:
-        logger.error(f"Credentials file not found at: {credentials_path}")
+        logger.error(f"Credentials file not found at: {config.get_credentials_path()}")
         raise Exception("Google Service Account credentials file not found")
     except Exception as e:
         logger.error(f"Authentication failed: {str(e)}")
@@ -88,7 +95,7 @@ def _get_spreadsheet() -> gspread.Spreadsheet:
         return _spreadsheet
         
     except SpreadsheetNotFound:
-        logger.error(f"Spreadsheet not found with ID: {sheet_id}")
+        logger.error(f"Spreadsheet not found with ID: {get_google_sheet_id()}")
         raise Exception("Google Spreadsheet not found or not accessible")
     except Exception as e:
         logger.error(f"Failed to open spreadsheet: {str(e)}")
@@ -154,6 +161,9 @@ def append_row(sheet_name: str, row_data: List[Any]) -> bool:
         raise Exception(f"Failed to append row to worksheet: {str(e)}")
 
 
+# (The rest of your functions: get_all_records, get_all_values, clear_worksheet, etc., can remain exactly as they were)
+# I am omitting them here for brevity, but you should keep them in your file.
+# The only changes required are at the very top of the file.
 def get_all_records(sheet_name: str) -> List[Dict[str, Any]]:
     """
     Get all records from a worksheet as a list of dictionaries.
