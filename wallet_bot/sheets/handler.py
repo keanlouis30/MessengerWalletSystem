@@ -203,7 +203,6 @@ def regenerate_formatted_report() -> bool:
         
         logger.info("Starting formatted report regeneration...")
         
-        # --- FIX STARTS HERE ---
         # 1. Check if the Data_Log sheet has headers.
         all_values = api.get_all_values(data_sheet_name)
         
@@ -217,7 +216,6 @@ def regenerate_formatted_report() -> bool:
         
         # 2. Get records safely now that we know headers exist.
         all_records = api.get_all_records(data_sheet_name)
-        # --- FIX ENDS HERE ---
         
         if not all_records:
             logger.info("No data found in Data_Log, creating empty report")
@@ -226,16 +224,42 @@ def regenerate_formatted_report() -> bool:
         # Convert to DataFrame for easier processing
         df = pd.DataFrame(all_records)
         
-        # This check is now less likely to fail, but it's good to keep
+        # Ensure the DataFrame has the required columns even if empty
+        # This handles the case where get_all_records() returns [] and DataFrame() creates an empty df with no columns
         required_columns = ['timestamp', 'transaction_type', 'category_or_source', 'description', 'amount']
+        
+        # Check if DataFrame is empty or missing columns
+        if df.empty:
+            logger.info("DataFrame is empty after conversion, creating empty report")
+            return _create_empty_report(report_sheet_name)
+        
         missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
-            # This indicates a deeper problem if it still happens
-            raise ValueError(f"FATAL: Missing required columns in Data_Log even after header check: {missing_columns}")
+            logger.error(f"Missing required columns in DataFrame: {missing_columns}")
+            logger.error(f"Available columns: {list(df.columns) if not df.empty else 'None'}")
+            logger.error(f"DataFrame shape: {df.shape}")
+            logger.error(f"Sample of all_records: {all_records[:2] if all_records else 'Empty'}")
+            raise ValueError(f"Missing required columns in Data_Log: {missing_columns}")
         
         # Convert timestamp and amount columns
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-        df['amount'] = pd.to_numeric(df['amount'], errors='coerce')
+        try:
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+        except Exception as e:
+            logger.error(f"Error converting timestamp column: {str(e)}")
+            raise ValueError(f"Failed to convert timestamp column: {str(e)}")
+        
+        try:
+            df['amount'] = pd.to_numeric(df['amount'], errors='coerce')
+        except Exception as e:
+            logger.error(f"Error converting amount column: {str(e)}")
+            raise ValueError(f"Failed to convert amount column: {str(e)}")
+        
+        # Check for any NaN values in amount after conversion
+        nan_amounts = df['amount'].isna().sum()
+        if nan_amounts > 0:
+            logger.warning(f"Found {nan_amounts} invalid amounts that were converted to NaN")
+            # Remove rows with invalid amounts
+            df = df.dropna(subset=['amount'])
         
         # Sort by timestamp (newest first)
         df = df.sort_values('timestamp', ascending=False)
@@ -256,7 +280,7 @@ def regenerate_formatted_report() -> bool:
     except Exception as e:
         logger.error(f"Failed to regenerate formatted report: {str(e)}")
         raise Exception(f"Failed to regenerate formatted report: {str(e)}")
-
+    
 def _build_formatted_report_content(df: pd.DataFrame) -> List[List[str]]:
     """
     Build the content for the formatted report with daily grouping.
