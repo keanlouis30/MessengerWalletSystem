@@ -88,6 +88,14 @@ def _prepare_dataframe(transactions: List[Dict[str, Any]], period: str) -> pd.Da
     # Convert to DataFrame
     df = pd.DataFrame(transactions)
     
+    # FIXED: Map actual column names from sheets to expected names
+    # The sheets use 'transaction_type' and 'category_or_source'
+    # but this module expects 'type' and 'category'
+    if 'transaction_type' in df.columns:
+        df['type'] = df['transaction_type']
+    if 'category_or_source' in df.columns:
+        df['category'] = df['category_or_source']
+    
     # Ensure required columns exist
     required_columns = ['timestamp', 'type', 'amount', 'category', 'description']
     for col in required_columns:
