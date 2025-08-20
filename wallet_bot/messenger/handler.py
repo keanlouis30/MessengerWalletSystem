@@ -491,18 +491,15 @@ def _handle_income_amount(user_id: str, amount_text: str) -> bool:
 def _log_expense_transaction(user_id: str, amount: float, description: str, category: str) -> bool:
     """Log expense transaction to Google Sheets."""
     try:
-        # Prepare transaction data
-        transaction_data = {
-            "timestamp": datetime.now().isoformat(),
-            "user_id": user_id,
-            "type": "expense",
-            "amount": amount,
-            "description": description,
-            "category": category
-        }
-        
-        # Log to sheets
-        success = log_transaction(transaction_data)
+        # Log to sheets by passing the correct arguments for an EXPENSE
+        success = log_transaction(
+            transaction_type='expense',             # <-- FIX 1: Changed to 'expense'
+            category_or_source=category,          # <-- FIX 2: Changed to use the 'category' variable
+            description=description,
+            amount=amount,
+            user_id=user_id
+        )
+
         if success:
             # Trigger report regeneration in background
             regenerate_formatted_report()
@@ -528,7 +525,14 @@ def _log_income_transaction(user_id: str, amount: float, description: str, sourc
         }
         
         # Log to sheets
-        success = log_transaction(transaction_data)
+        success = log_transaction(
+            transaction_type='income',
+            category_or_source=source,
+            description=description,
+            amount=amount,
+            user_id=user_id
+        ) # <--- THIS IS THE FIX
+
         if success:
             # Trigger report regeneration in background
             regenerate_formatted_report()
