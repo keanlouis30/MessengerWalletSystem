@@ -12,7 +12,7 @@ from typing import List, Dict, Any, Optional
 from google.oauth2.service_account import Credentials
 from gspread.exceptions import APIError, SpreadsheetNotFound, WorksheetNotFound
 
-from wallet_bot.config.settings import get_credentials_data, get_google_sheet_id
+from wallet_bot.config.settings import get_credentials_path, get_google_sheet_id
 
 # Set up logging
 logger = logging.getLogger(__name__)
