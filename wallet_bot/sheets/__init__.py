@@ -10,6 +10,5 @@
 from .handler import (
     log_transaction,
     get_transactions_for_period,
-    regenerate_formatted_report,
-    get_user_categories
+    regenerate_formatted_report
 )
