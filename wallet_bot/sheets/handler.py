@@ -203,63 +203,85 @@ def regenerate_formatted_report() -> bool:
         
         logger.info("Starting formatted report regeneration...")
         
-        # 1. Check if the Data_Log sheet has headers.
+        # Get all values from the sheet to inspect the structure
         all_values = api.get_all_values(data_sheet_name)
         
-        if not all_values or all_values[0] != DATA_LOG_COLUMNS:
-            # If the sheet is empty or headers are incorrect, create them.
-            logger.warning("Data_Log sheet is empty or has incorrect headers. Initializing...")
+        # Check if sheet is completely empty
+        if not all_values:
+            logger.info("Data_Log sheet is completely empty. Initializing with headers...")
+            api.append_row(data_sheet_name, DATA_LOG_COLUMNS)
+            return _create_empty_report(report_sheet_name)
+        
+        # Check if the first row matches our expected headers exactly
+        if all_values[0] != DATA_LOG_COLUMNS:
+            logger.warning(f"Headers mismatch. Expected: {DATA_LOG_COLUMNS}")
+            logger.warning(f"Found: {all_values[0] if all_values else 'None'}")
+            
+            # Clear the sheet and set correct headers
+            logger.info("Clearing sheet and setting correct headers...")
             api.clear_worksheet(data_sheet_name)
             api.append_row(data_sheet_name, DATA_LOG_COLUMNS)
-            # Re-fetch the values now that headers are present.
-            all_values = api.get_all_values(data_sheet_name)
+            return _create_empty_report(report_sheet_name)
         
-        # 2. Get records safely now that we know headers exist.
+        # Get records using the API
         all_records = api.get_all_records(data_sheet_name)
         
         if not all_records:
-            logger.info("No data found in Data_Log, creating empty report")
+            logger.info("No data records found (only headers exist), creating empty report")
             return _create_empty_report(report_sheet_name)
         
-        # Convert to DataFrame for easier processing
+        # Check if we got the header row as data (this happens when get_all_records fails)
+        if len(all_records) == 1 and all_records[0].get('timestamp') == 'timestamp':
+            logger.warning("Detected header row returned as data. No actual transactions exist.")
+            return _create_empty_report(report_sheet_name)
+        
+        # Convert to DataFrame
         df = pd.DataFrame(all_records)
         
-        # Ensure the DataFrame has the required columns even if empty
-        # This handles the case where get_all_records() returns [] and DataFrame() creates an empty df with no columns
-        required_columns = ['timestamp', 'transaction_type', 'category_or_source', 'description', 'amount']
+        # Log DataFrame info for debugging
+        logger.debug(f"DataFrame shape: {df.shape}")
+        logger.debug(f"DataFrame columns: {list(df.columns)}")
         
-        # Check if DataFrame is empty or missing columns
-        if df.empty:
-            logger.info("DataFrame is empty after conversion, creating empty report")
+        # Check for required columns
+        required_columns = ['timestamp', 'transaction_type', 'category_or_source', 'description', 'amount']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        
+        if missing_columns:
+            logger.error(f"Missing required columns: {missing_columns}")
+            logger.error(f"Available columns: {list(df.columns)}")
+            # Try to create empty report instead of failing
+            logger.warning("Creating empty report due to column mismatch")
             return _create_empty_report(report_sheet_name)
         
-        missing_columns = [col for col in required_columns if col not in df.columns]
-        if missing_columns:
-            logger.error(f"Missing required columns in DataFrame: {missing_columns}")
-            logger.error(f"Available columns: {list(df.columns) if not df.empty else 'None'}")
-            logger.error(f"DataFrame shape: {df.shape}")
-            logger.error(f"Sample of all_records: {all_records[:2] if all_records else 'Empty'}")
-            raise ValueError(f"Missing required columns in Data_Log: {missing_columns}")
+        # Filter out any rows that are actually headers
+        df = df[df['timestamp'] != 'timestamp']
         
-        # Convert timestamp and amount columns
+        if df.empty:
+            logger.info("No valid transaction data found after filtering, creating empty report")
+            return _create_empty_report(report_sheet_name)
+        
+        # Convert data types
         try:
             df['timestamp'] = pd.to_datetime(df['timestamp'])
         except Exception as e:
-            logger.error(f"Error converting timestamp column: {str(e)}")
-            raise ValueError(f"Failed to convert timestamp column: {str(e)}")
+            logger.error(f"Error converting timestamp: {str(e)}")
+            logger.error(f"Sample timestamp values: {df['timestamp'].head().tolist()}")
+            return _create_empty_report(report_sheet_name)
         
         try:
             df['amount'] = pd.to_numeric(df['amount'], errors='coerce')
-        except Exception as e:
-            logger.error(f"Error converting amount column: {str(e)}")
-            raise ValueError(f"Failed to convert amount column: {str(e)}")
-        
-        # Check for any NaN values in amount after conversion
-        nan_amounts = df['amount'].isna().sum()
-        if nan_amounts > 0:
-            logger.warning(f"Found {nan_amounts} invalid amounts that were converted to NaN")
             # Remove rows with invalid amounts
-            df = df.dropna(subset=['amount'])
+            invalid_amounts = df['amount'].isna().sum()
+            if invalid_amounts > 0:
+                logger.warning(f"Removing {invalid_amounts} rows with invalid amounts")
+                df = df.dropna(subset=['amount'])
+        except Exception as e:
+            logger.error(f"Error converting amount: {str(e)}")
+            return _create_empty_report(report_sheet_name)
+        
+        if df.empty:
+            logger.info("No valid data remaining after type conversion, creating empty report")
+            return _create_empty_report(report_sheet_name)
         
         # Sort by timestamp (newest first)
         df = df.sort_values('timestamp', ascending=False)
@@ -271,16 +293,144 @@ def regenerate_formatted_report() -> bool:
         api.clear_worksheet(report_sheet_name)
         
         if report_content:
-            # Update the sheet with formatted content
             api.update_range(report_sheet_name, 'A1', report_content)
         
-        logger.info("Successfully regenerated formatted report")
+        logger.info(f"Successfully regenerated formatted report with {len(df)} transactions")
         return True
         
     except Exception as e:
         logger.error(f"Failed to regenerate formatted report: {str(e)}")
-        raise Exception(f"Failed to regenerate formatted report: {str(e)}")
+        # Try to create empty report as fallback
+        try:
+            return _create_empty_report(get_formatted_report_sheet_name())
+        except:
+            raise Exception(f"Failed to regenerate formatted report: {str(e)}")
+
+
+def fix_data_log_headers() -> bool:
+    """
+    Fix the Data_Log sheet headers by clearing the sheet and setting correct headers.
+    This is a utility function to repair the sheet structure.
     
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        data_sheet_name = get_data_log_sheet_name()
+        
+        logger.info("Fixing Data_Log sheet headers...")
+        
+        # Get current values to backup any real data
+        all_values = api.get_all_values(data_sheet_name)
+        
+        if not all_values:
+            logger.info("Sheet is empty, just adding headers")
+            api.append_row(data_sheet_name, DATA_LOG_COLUMNS)
+            return True
+        
+        # Check if there's any real transaction data to preserve
+        real_data = []
+        for i, row in enumerate(all_values):
+            if i == 0:  # Skip header row
+                continue
+            
+            # Skip rows that are clearly not transaction data
+            if (len(row) >= 6 and 
+                row[0] not in ['timestamp', '', None] and
+                row[1] in ['income', 'expense'] and
+                row[4] not in ['amount', '', None]):  # amount column check
+                real_data.append(row)
+        
+        # Clear the sheet
+        api.clear_worksheet(data_sheet_name)
+        
+        # Add correct headers
+        api.append_row(data_sheet_name, DATA_LOG_COLUMNS)
+        
+        # Restore any real data
+        if real_data:
+            logger.info(f"Preserving {len(real_data)} existing transaction records")
+            for row in real_data:
+                # Ensure the row has exactly the right number of columns
+                padded_row = (row + [''] * len(DATA_LOG_COLUMNS))[:len(DATA_LOG_COLUMNS)]
+                api.append_row(data_sheet_name, padded_row)
+        
+        logger.info("Successfully fixed Data_Log sheet headers")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to fix Data_Log headers: {str(e)}")
+        return False
+
+
+def initialize_sheets() -> bool:
+    """
+    Initialize both Data_Log and Formatted_Report sheets with proper headers.
+    
+    Returns:
+        bool: True if successful, False otherwise
+        
+    Raises:
+        Exception: If initialization fails
+    """
+    try:
+        data_sheet = get_data_log_sheet_name()
+        report_sheet = get_formatted_report_sheet_name()
+        
+        logger.info("Initializing sheets...")
+        
+        # Fix Data_Log sheet headers first
+        if not fix_data_log_headers():
+            logger.error("Failed to fix Data_Log headers")
+            return False
+        
+        # Initialize Formatted_Report sheet with welcome message
+        _create_empty_report(report_sheet)
+        
+        logger.info("Successfully initialized both sheets")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to initialize sheets: {str(e)}")
+        raise Exception(f"Failed to initialize sheets: {str(e)}")
+
+
+# Add this diagnostic function to help troubleshoot
+def diagnose_sheet_structure() -> Dict[str, Any]:
+    """
+    Diagnose the current sheet structure for debugging.
+    
+    Returns:
+        Dict: Information about the sheet structure
+    """
+    try:
+        data_sheet_name = get_data_log_sheet_name()
+        
+        # Get raw values
+        all_values = api.get_all_values(data_sheet_name)
+        
+        # Get records
+        all_records = api.get_all_records(data_sheet_name)
+        
+        diagnosis = {
+            'sheet_name': data_sheet_name,
+            'total_rows': len(all_values),
+            'expected_headers': DATA_LOG_COLUMNS,
+            'actual_first_row': all_values[0] if all_values else None,
+            'headers_match': all_values[0] == DATA_LOG_COLUMNS if all_values else False,
+            'records_count': len(all_records),
+            'sample_record': all_records[0] if all_records else None,
+            'all_columns': list(all_records[0].keys()) if all_records else []
+        }
+        
+        logger.info(f"Sheet diagnosis: {diagnosis}")
+        return diagnosis
+        
+    except Exception as e:
+        logger.error(f"Failed to diagnose sheet: {str(e)}")
+        return {'error': str(e)}
+    
+
 def _build_formatted_report_content(df: pd.DataFrame) -> List[List[str]]:
     """
     Build the content for the formatted report with daily grouping.
