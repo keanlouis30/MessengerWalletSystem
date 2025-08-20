@@ -88,17 +88,16 @@ class Config:
             )
     
     @classmethod
-    def get_credentials_data(cls):
-        """
-        Get Google Service Account credentials data.
+    def get_credentials_path(self):
+        # Get the path of the current file (settings.py)
+        current_dir = os.path.dirname(__file__)
         
-        Returns:
-            dict or str: Either credentials JSON object (from env var) or file path string.
-        """
-        if cls.GOOGLE_CREDENTIALS_JSON:
-            import json
-            return json.loads(cls.GOOGLE_CREDENTIALS_JSON)
-        return str(cls.CREDENTIALS_PATH)
+        # Go up three directories to get to the project root
+        # config -> wallet_bot -> src (root)
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_dir)))
+        
+        # Join the root path with the filename
+        return os.path.join(project_root, 'credentials.json')
     
     @classmethod
     def is_production(cls):
