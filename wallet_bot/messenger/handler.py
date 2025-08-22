@@ -61,6 +61,7 @@ INCOME_SOURCES = [
 ]
 
 STATS_PERIODS = [
+    {"title": "☀️ Today", "payload": "PERIOD_TODAY"},
     {"title": "📅 This Week", "payload": "PERIOD_WEEK"},
     {"title": "📆 This Month", "payload": "PERIOD_MONTH"}
 ]
@@ -385,6 +386,7 @@ def _handle_stats_period_selection(user_id: str, payload: str) -> bool:
     """Handle statistics period selection."""
     try:
         period_map = {
+            "PERIOD_TODAY": "Today",
             "PERIOD_WEEK": "This Week",
             "PERIOD_MONTH": "This Month"
         }

@@ -192,13 +192,15 @@ def get_transactions_for_period(period: str = "This Week", user_id: Optional[str
         raise Exception(f"Failed to retrieve transactions: {str(e)}")
 
 
+# In wallet_bot/sheets/handler.py
+
 def _filter_transactions_by_period_fixed(df: pd.DataFrame, period: str) -> pd.DataFrame:
     """
     FIXED: Filter transactions DataFrame by the specified time period using Manila timezone.
     
     Args:
         df (pd.DataFrame): DataFrame with transaction data
-        period (str): "This Week" or "This Month"
+        period (str): "Today", "This Week", or "This Month"
         
     Returns:
         pd.DataFrame: Filtered DataFrame
@@ -210,7 +212,12 @@ def _filter_transactions_by_period_fixed(df: pd.DataFrame, period: str) -> pd.Da
     logger.info(f"DEBUG: Current Manila time: {now_manila_time}")
     logger.info(f"DEBUG: Filtering for period: '{period}'")
     
-    if period == "This Week":
+    
+    if period == "Today":
+        # Get the start of today (midnight) in Manila timezone
+        cutoff = now_manila_time.replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    elif period == "This Week":
         # Get start of week in Manila timezone
         cutoff = get_week_start_manila(now_manila_time)
         
@@ -221,15 +228,10 @@ def _filter_transactions_by_period_fixed(df: pd.DataFrame, period: str) -> pd.Da
     else:
         logger.warning(f"Unknown period '{period}', returning all transactions")
         return df
+        
     
     # Debug: Show cutoff date
     logger.info(f"DEBUG: Cutoff date (Manila): {cutoff}")
-    
-    # Debug: Show date range of transactions
-    if not df.empty:
-        min_date = df['timestamp'].min()
-        max_date = df['timestamp'].max()
-        logger.info(f"DEBUG: Transaction date range: {min_date} to {max_date}")
     
     # Convert cutoff to naive datetime for comparison with parsed timestamps
     # (since the timestamps from sheets are parsed as naive datetime)
